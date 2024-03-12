@@ -2,7 +2,7 @@ import os
 import numpy as np
 from tqdm import tqdm
 from src.encoding.evolution import Evolve
-from pathos.multiprocessing import ProcessingPool as Pool
+from multiprocess.pool import Pool
 from sklearn.linear_model import LogisticRegressionCV, RidgeClassifier, LogisticRegression
 from qutip import wigner
 
