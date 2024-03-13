@@ -9,10 +9,10 @@ from qutip import wigner
 class Classify:
     cur_path = os.path.dirname(__file__)
     def __init__(self, compression=4,
-                 t_total=12, t_steps=50, coef_pc=0.25, coef_pq=0.25, N=20, g=1, dataset="mnist"):
+                 t_total=12, coef_pc=0.25, coef_pq=0.25, N=20, g=1, nsteps=1000, dataset="mnist"):
         self.compression = compression
         self.t_total = t_total
-        self.t_steps = t_steps
+        self.nsteps = nsteps
         self.coef_pc = coef_pc
         self.coef_pq = coef_pq
         self.N = N
@@ -40,11 +40,11 @@ class Classify:
         else:
             match dataset:
                 case "fashion":
-                    from tensorflow.keras.datasets import fashion_mnist as mnist
+                    from keras.datasets import fashion_mnist as mnist
                 case "mnist":
-                    from tensorflow.keras.datasets import mnist
+                    from keras.datasets import mnist
                 case _:
-                    from tensorflow.keras.datasets import mnist
+                    from keras.datasets import mnist
             import tensorflow as tf
             (train_X, self.train_y), (test_X, self.test_y) = mnist.load_data()
             trainSize_total = len(train_X)
@@ -57,7 +57,7 @@ class Classify:
                 np.savez(f, train_X=self.train_X, train_y=self.train_y, test_X=self.test_X, test_y=self.test_y)
 
     def __getStates(self, img):
-        e = Evolve(img, self.t_total, self.t_steps, self.coef_pc, self.coef_pq, self.N, self.g)
+        e = Evolve(img, self.t_total, self.coef_pc, self.coef_pq, self.N, self.g, self.nsteps)
         return e.states()
 
     def __multiprocess(self, train_imgs, test_imgs, max_pool=10):
@@ -90,10 +90,11 @@ class Classify:
         test_imgs = self.test_X[:testSize]
         self.trainSize = trainSize
         self.testSize = testSize
-        self.train_X_states, self.test_X_states = self.__multiprocess(train_imgs, test_imgs, max_pool=max_pool)
+        train_X_states, test_X_states = self.__multiprocess(train_imgs, test_imgs, max_pool=max_pool)
+        self.train_X_states = train_X_states
+        self.test_X_states = test_X_states
         self.trained = True
         return self
-
     def __state(self, states, p):
         return states[int(p*(self.t_steps-1))]
 
@@ -102,6 +103,14 @@ class Classify:
         for i in range(1, self.copies+1):
             w += list(wigner(self.__state(states, i / self.copies), self.xvec, self.yvec).flatten())
         return np.real(w)
+
+    def __rho(self, states):
+        rho = states[-1]
+        rho.tidyup()
+        diag = rho.diag()[:-1]
+        x = rho.full()
+        y = x[np.triu_indices_from(x,k=1)]
+        return np.concatenate((diag, y.real, y.imag))
 
     def process(self, copies=8,  xRange=(-2.5, 2), yRange=(-2, 4.5), res=30):
         if not self.trained:
@@ -116,10 +125,15 @@ class Classify:
         self.test_X_processed = list(map(self.__wigner, tqdm(self.test_X_states)))
         self.processed = True
         return self
-    def score(self, n_regressors=("LogCV",), q_regressors=("Ridge",), n_alpha=0.1, q_alpha=0):
-        if not self.processed:
-            print("Unable to score. Data has not been processed")
+    def process_rho(self):
+        if not self.trained:
+            print("Unable to process. Data has not been trained")
             return
+        self.train_X_processed = list(map(self.__rho, tqdm(self.train_X_states)))
+        self.test_X_processed = list(map(self.__rho, tqdm(self.test_X_states)))
+        self.processed = True
+        return self
+    def score(self, n_regressors=("LogCV",), q_regressors=("Ridge",), n_alpha=0.1, q_alpha=0):
         trainRange = slice(0, self.trainSize)
         testRange = slice(0, self.testSize)
         reg_dict = {"LogCV": "Logistic Regression CV", "Log": "Logistic Regression", "Ridge": "Ridge Classifier"}
@@ -139,6 +153,9 @@ class Classify:
             print(f"{reg_dict[r]} (Without Quantum processing) yields: {score}")
 
         for r in q_regressors:
+            if not self.processed:
+                print("Unable to score. Data has not been processed")
+                return
             match r:
                 case "Log":
                     clf = LogisticRegression(max_iter=1000)
