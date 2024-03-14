@@ -9,7 +9,7 @@ from qutip import wigner
 class Classify:
     cur_path = os.path.dirname(__file__)
     def __init__(self, compression=4,
-                 t_total=12, coef_pc=0.25, coef_pq=0.25, N=20, g=1, nsteps=1000, dataset="mnist"):
+                 t_total=12, coef_pc=0.25, coef_pq=0.25, N=20, g=1, nsteps=1000, intervals=1, matrix=False, dataset="mnist"):
         self.compression = compression
         self.t_total = t_total
         self.nsteps = nsteps
@@ -17,11 +17,14 @@ class Classify:
         self.coef_pq = coef_pq
         self.N = N
         self.g = g
+        self.matrix = matrix
+        self.intervals = intervals
         self.dataset = dataset
         self.loaded = True
         self.__loadData(dataset)
         self.trained = False
         self.processed = False
+        self.M = np.random.rand(compression**2, compression**2)*2/compression**2
     def __loadData(self, dataset):
         n = self.compression
         match dataset:
@@ -57,7 +60,9 @@ class Classify:
                 np.savez(f, train_X=self.train_X, train_y=self.train_y, test_X=self.test_X, test_y=self.test_y)
 
     def __getStates(self, img):
-        e = Evolve(img, self.t_total, self.coef_pc, self.coef_pq, self.N, self.g, self.nsteps)
+        if self.matrix:
+            img = self.M @ img
+        e = Evolve(img, self.t_total, self.coef_pc, self.coef_pq, self.N, self.g, self.nsteps, self.intervals)
         return e.states()
 
     def __multiprocess(self, train_imgs, test_imgs, max_pool=10):
@@ -86,39 +91,42 @@ class Classify:
         if not self.loaded:
             print("Unable to train. No Datasets Loaded.")
             return
-        train_imgs = self.train_X[:trainSize]
-        test_imgs = self.test_X[:testSize]
+        trainRange = np.random.choice(len(self.train_X), size=trainSize, replace=False)
+        testRange = np.random.choice(len(self.test_X), size=testSize, replace=False)
+        self.train_X_sampled = self.train_X[trainRange]
+        self.test_X_sampled = self.test_X[testRange]
+        self.train_y_sampled = self.train_y[trainRange]
+        self.test_y_sampled = self.test_y[testRange]
         self.trainSize = trainSize
         self.testSize = testSize
-        train_X_states, test_X_states = self.__multiprocess(train_imgs, test_imgs, max_pool=max_pool)
+        train_X_states, test_X_states = self.__multiprocess(self.train_X_sampled, self.test_X_sampled, max_pool=max_pool)
         self.train_X_states = train_X_states
         self.test_X_states = test_X_states
         self.trained = True
         return self
-    def __state(self, states, p):
-        return states[int(p*(self.t_steps-1))]
 
     def __wigner(self, states):
         w = []
-        for i in range(1, self.copies+1):
-            w += list(wigner(self.__state(states, i / self.copies), self.xvec, self.yvec).flatten())
+        for state in states:
+            w += list(wigner(state, self.xvec, self.yvec).flatten())
         return np.real(w)
 
     def __rho(self, states):
-        rho = states[-1]
-        rho.tidyup()
-        diag = rho.diag()[:-1]
-        x = rho.full()
-        y = x[np.triu_indices_from(x,k=1)]
-        return np.concatenate((diag, y.real, y.imag))
+        r = np.array([])
+        for rho in states:
+            rho.tidyup()
+            diag = rho.diag()[:-1]
+            x = rho.full()
+            y = x[np.triu_indices_from(x,k=1)]
+            r = np.concatenate((r, diag, y.real, y.imag))
+        return r
 
-    def process(self, copies=8,  xRange=(-2.5, 2), yRange=(-2, 4.5), res=30):
+    def process(self, xRange=(-2.5, 2), yRange=(-2, 4.5), res=30):
         if not self.trained:
             print("Unable to process. Data has not been trained")
             return
         xvec = np.linspace(*xRange, res)
         yvec = np.linspace(*yRange, res)
-        self.copies = copies
         self.xvec = xvec
         self.yvec = yvec
         self.train_X_processed = list(map(self.__wigner, tqdm(self.train_X_states)))
@@ -134,8 +142,6 @@ class Classify:
         self.processed = True
         return self
     def score(self, n_regressors=("LogCV",), q_regressors=("Ridge",), n_alpha=0.1, q_alpha=0):
-        trainRange = slice(0, self.trainSize)
-        testRange = slice(0, self.testSize)
         reg_dict = {"LogCV": "Logistic Regression CV", "Log": "Logistic Regression", "Ridge": "Ridge Classifier"}
         for r in n_regressors:
             match r:
@@ -148,8 +154,8 @@ class Classify:
                 case _:
                     print("Regression type not valid")
                     continue
-            clf.fit(self.train_X[trainRange], self.train_y[trainRange])
-            score = clf.score(self.test_X[testRange], self.test_y[testRange])
+            clf.fit(self.train_X_sampled, self.train_y_sampled)
+            score = clf.score(self.test_X_sampled, self.test_y_sampled)
             print(f"{reg_dict[r]} (Without Quantum processing) yields: {score}")
 
         for r in q_regressors:
@@ -166,8 +172,8 @@ class Classify:
                 case _:
                     print("Regression type not valid")
                     continue
-            clf.fit(self.train_X_processed, self.train_y[trainRange])
-            q_score = clf.score(self.test_X_processed, self.test_y[testRange])
+            clf.fit(self.train_X_processed, self.train_y_sampled)
+            q_score = clf.score(self.test_X_processed, self.test_y_sampled)
             print(f"{reg_dict[r]} (With Quantum processing) yields: {q_score}")
 
 

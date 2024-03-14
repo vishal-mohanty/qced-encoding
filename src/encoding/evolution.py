@@ -1,11 +1,10 @@
 import numpy as np
-from qutip import tensor, destroy, qeye, fock, sigmax, sigmay, mesolve, QobjEvo, qload, qsave, displace, qfunc, Options
+from qutip import tensor, destroy, qeye, fock, sigmax, sigmay, mesolve, Options
 import os
-from xxhash import xxh128
 
 class Evolve:
     cur_path = os.path.dirname(__file__)
-    def __init__(self, img, t_total, coef_pc, coef_pq, N, g, nsteps):
+    def __init__(self, img, t_total, coef_pc, coef_pq, N, g, nsteps, intervals):
         self.img = np.array(img).flatten()
         self.t_total = t_total
         self.N = N
@@ -14,7 +13,7 @@ class Evolve:
         self.coef_pq = coef_pq
         self.nsteps = nsteps
         self.img_len = len(self.img)
-
+        self.tlist = np.linspace(0, self.t_total, intervals+1)
         self.a = tensor(destroy(N), qeye(2))
         self.e = tensor(qeye(N), fock(2, 1))
         self.sx = tensor(qeye(N), sigmax())
@@ -44,5 +43,5 @@ class Evolve:
         H0 = -self.g / 2 * self.a.dag() * self.a * self.e * self.e.dag()
         options = Options(nsteps=self.nsteps)
         H = [H0, [self.a.dag(), self.__pc], [self.a, self.__pcc], [self.sx, self.__pq], [self.sy, self.__pqc]]
-        rho = [p.ptrace([0]) for p in mesolve(H, self.rho_i, tlist=[0, self.t_total], options=options).states]
-        return rho
+        rho = [p.ptrace([0]) for p in mesolve(H, self.rho_i, tlist=self.tlist, options=options).states]
+        return rho[1:]
