@@ -9,12 +9,14 @@ from qutip import wigner
 class Classify:
     cur_path = os.path.dirname(__file__)
     def __init__(self, compression=4,
-                 t_total=12, coef_pc=0.25, coef_pq=0.25, N=20, g=1, nsteps=1000, intervals=1, matrix=False, dataset="mnist"):
+                 t_total=12, pc_real=0.238*1e6, pc_imag=0, pq_real=0.238*1e6, pq_imag=0, N=11, g=1.4*1e6, nsteps=1000, intervals=1, matrix=False, dataset="mnist"):
         self.compression = compression
         self.t_total = t_total
         self.nsteps = nsteps
-        self.coef_pc = coef_pc
-        self.coef_pq = coef_pq
+        self.pc_real = pc_real
+        self.pc_imag = pc_imag
+        self.pq_real = pq_real
+        self.pq_imag = pq_imag
         self.N = N
         self.g = g
         self.matrix = matrix
@@ -54,15 +56,15 @@ class Classify:
             testSize_total = len(test_X)
             train_X = tf.image.resize(train_X[..., tf.newaxis], [n,n], method='gaussian', antialias=True)
             test_X = tf.image.resize(test_X[..., tf.newaxis], [n,n], method='gaussian', antialias=True)
-            self.train_X = (np.reshape(train_X, (trainSize_total, n*n))-128)/128
-            self.test_X = (np.reshape(test_X, (testSize_total, n*n))-128)/128
+            self.train_X = np.reshape(train_X, (trainSize_total, n*n))/127.5 - 1
+            self.test_X = np.reshape(test_X, (testSize_total, n*n))/127.5 - 1
             with open(save_path, "wb") as f:
                 np.savez(f, train_X=self.train_X, train_y=self.train_y, test_X=self.test_X, test_y=self.test_y)
 
     def __getStates(self, img):
         if self.matrix:
             img = self.M @ img
-        e = Evolve(img, self.t_total, self.coef_pc, self.coef_pq, self.N, self.g, self.nsteps, self.intervals)
+        e = Evolve(img, self.t_total, self.pc_real, self.pc_imag, self.pq_real, self.pq_imag, self.N, self.g, self.nsteps, self.intervals)
         return e.states()
 
     def __multiprocess(self, train_imgs, test_imgs, max_pool=10):
@@ -115,7 +117,7 @@ class Classify:
         r = np.array([])
         for rho in states:
             rho.tidyup()
-            diag = rho.diag()[:-1]
+            diag = np.real(rho.diag()[:-1])
             x = rho.full()
             y = x[np.triu_indices_from(x,k=1)]
             r = np.concatenate((r, diag, y.real, y.imag))
@@ -141,6 +143,11 @@ class Classify:
         self.test_X_processed = list(map(self.__rho, tqdm(self.test_X_states)))
         self.processed = True
         return self
+    def scoreR(self):
+        clf = RidgeClassifier(alpha=0)
+        clf.fit(self.train_X_processed, self.train_y_sampled)
+        q_score = clf.score(self.test_X_processed, self.test_y_sampled)
+        return q_score
     def score(self, n_regressors=("LogCV",), q_regressors=("Ridge",), n_alpha=0.1, q_alpha=0):
         reg_dict = {"LogCV": "Logistic Regression CV", "Log": "Logistic Regression", "Ridge": "Ridge Classifier"}
         for r in n_regressors:
