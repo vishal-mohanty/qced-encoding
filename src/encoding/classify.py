@@ -5,11 +5,13 @@ from src.encoding.evolution import Evolve
 from multiprocess.pool import Pool
 from sklearn.linear_model import LogisticRegressionCV, RidgeClassifier, LogisticRegression
 from qutip import wigner
+import tensorflow as tf
+import tensorflow_datasets as tfds
 
 class Classify:
     cur_path = os.path.dirname(__file__)
     def __init__(self, compression=4,
-                 t_total=12, pc_real=0.238*1e6, pc_imag=0, pq_real=0.238*1e6, pq_imag=0, N=11, g=1.4*1e6, nsteps=1000, intervals=1, matrix=False, dataset="mnist"):
+                 t_total=12, pc_real=0.238*1e6, pc_imag=0, pq_real=0.238*1e6, pq_imag=0, N=11, g=1.4*1e6, nsteps=1000, intervals=1, dataset="mnist"):
         self.compression = compression
         self.t_total = t_total
         self.nsteps = nsteps
@@ -19,54 +21,54 @@ class Classify:
         self.pq_imag = pq_imag
         self.N = N
         self.g = g
-        self.matrix = matrix
         self.intervals = intervals
         self.dataset = dataset
-        self.loaded = True
-        self.__loadData(dataset)
         self.trained = False
         self.processed = False
-        self.M = np.random.rand(compression**2, compression**2)*2/compression**2
-    def __loadData(self, dataset):
-        n = self.compression
-        match dataset:
-            case "mnist":
-                save_path = os.path.relpath(f"data\\datasets\\mnist_{self.compression}.npz", self.cur_path)
+    def __loadData(self):
+        if self.dataset not in tfds.list_builders():
+            print("No such dataset available.")
+            return False
 
-            case "fashion":
-                save_path = os.path.relpath(f"data\\datasets\\fmnist_{self.compression}.npz", self.cur_path)
-            case _:
-                print("No such dataset exists")
-                self.loaded = False
-                return
-        if os.path.isfile(save_path):
-            data = np.load(save_path)
-            self.train_X, self.train_y, self.test_X, self.test_y = data['train_X'], data['train_y'], data['test_X'], data['test_y']
-        else:
-            match dataset:
-                case "fashion":
-                    from keras.datasets import fashion_mnist as mnist
-                case "mnist":
-                    from keras.datasets import mnist
-                case _:
-                    from keras.datasets import mnist
-            import tensorflow as tf
-            (train_X, self.train_y), (test_X, self.test_y) = mnist.load_data()
-            trainSize_total = len(train_X)
-            testSize_total = len(test_X)
-            train_X = tf.image.resize(train_X[..., tf.newaxis], [n,n], method='gaussian', antialias=True)
-            test_X = tf.image.resize(test_X[..., tf.newaxis], [n,n], method='gaussian', antialias=True)
-            self.train_X = np.reshape(train_X, (trainSize_total, n*n))/127.5 - 1
-            self.test_X = np.reshape(test_X, (testSize_total, n*n))/127.5 - 1
-            with open(save_path, "wb") as f:
-                np.savez(f, train_X=self.train_X, train_y=self.train_y, test_X=self.test_X, test_y=self.test_y)
+        ds_train, ds_test = tfds.load(self.dataset, split=['train', 'test'], as_supervised=True, shuffle_files=True)
+
+        trainSize_total = ds_train.cardinality().numpy()
+        testSize_total = ds_test.cardinality().numpy()
+        ds_train = ds_train.shuffle(trainSize_total)
+        ds_test = ds_test.shuffle(testSize_total)
+        if self.trainSize > trainSize_total:
+            print(f"Maximum size of training data for dataset: '{self.dataset}' is {trainSize_total}")
+            return False
+        elif self.testSize > testSize_total:
+            print(f"Maximum size of test data for dataset: '{self.dataset}' is {trainSize_total}")
+            return False
+        n = self.compression
+
+        def reshape(image, label):
+            image = tf.image.resize(image, [n, n], method='gaussian', antialias=True)
+            image = tf.cast(image, tf.float32) / 127.5 - 1
+            return tf.reshape(image, [-1]), label
+
+        ds_train = ds_train.map(reshape, num_parallel_calls=tf.data.AUTOTUNE)
+        ds_test = ds_test.map(reshape, num_parallel_calls=tf.data.AUTOTUNE)
+        train_X, train_y, test_X, test_y = [], [], [], []
+        print("Retrieving datasets...")
+        for x, y in tqdm(ds_train.take(self.trainSize)):
+            train_X.append(x.numpy())
+            train_y.append(y.numpy())
+        for x, y in tqdm(ds_test.take(self.testSize)):
+            test_X.append(x.numpy())
+            test_y.append(y.numpy())
+
+        self.train_X = np.array(train_X)
+        self.train_y = np.array(train_y)
+        self.test_X = np.array(test_X)
+        self.test_y = np.array(test_y)
+        return True
 
     def __getStates(self, img):
-        if self.matrix:
-            img = self.M @ img
         e = Evolve(img, self.t_total, self.pc_real, self.pc_imag, self.pq_real, self.pq_imag, self.N, self.g, self.nsteps, self.intervals)
         return e.states()
-
     def __multiprocess(self, train_imgs, test_imgs, max_pool=10):
         if max_pool <= 1:
             train_X_states = list(map(self.__getStates, tqdm(train_imgs)))
@@ -90,18 +92,12 @@ class Classify:
         return train_X_states, test_X_states
 
     def train(self, trainSize, testSize, max_pool=10):
-        if not self.loaded:
-            print("Unable to train. No Datasets Loaded.")
-            return
-        trainRange = np.random.choice(len(self.train_X), size=trainSize, replace=False)
-        testRange = np.random.choice(len(self.test_X), size=testSize, replace=False)
-        self.train_X_sampled = self.train_X[trainRange]
-        self.test_X_sampled = self.test_X[testRange]
-        self.train_y_sampled = self.train_y[trainRange]
-        self.test_y_sampled = self.test_y[testRange]
         self.trainSize = trainSize
         self.testSize = testSize
-        train_X_states, test_X_states = self.__multiprocess(self.train_X_sampled, self.test_X_sampled, max_pool=max_pool)
+        if not self.__loadData():   # Returns False if unable to loadData
+            return self
+        print("Evolving Hamiltonians for each Image...")
+        train_X_states, test_X_states = self.__multiprocess(self.train_X, self.test_X, max_pool=max_pool)
         self.train_X_states = train_X_states
         self.test_X_states = test_X_states
         self.trained = True
@@ -131,6 +127,7 @@ class Classify:
         yvec = np.linspace(*yRange, res)
         self.xvec = xvec
         self.yvec = yvec
+        print("Vectorizing quantum states...")
         self.train_X_processed = list(map(self.__wigner, tqdm(self.train_X_states)))
         self.test_X_processed = list(map(self.__wigner, tqdm(self.test_X_states)))
         self.processed = True
@@ -138,17 +135,41 @@ class Classify:
     def process_rho(self):
         if not self.trained:
             print("Unable to process. Data has not been trained")
-            return
+            return self
+        print("Vectorizing quantum states...")
         self.train_X_processed = list(map(self.__rho, tqdm(self.train_X_states)))
         self.test_X_processed = list(map(self.__rho, tqdm(self.test_X_states)))
         self.processed = True
         return self
+
     def scoreR(self):
+        mq = []
+        for i in range(5, 26, 3):
+            clf = RidgeClassifier(alpha=pow(10, -i))
+            clf.fit(self.train_X_processed, self.train_y)
+            q_score = clf.score(self.test_X_processed, self.test_y)
+            mq.append(q_score)
         clf = RidgeClassifier(alpha=0)
-        clf.fit(self.train_X_processed, self.train_y_sampled)
-        q_score = clf.score(self.test_X_processed, self.test_y_sampled)
-        return q_score
+        clf.fit(self.train_X_processed, self.train_y)
+        q_score = clf.score(self.test_X_processed, self.test_y)
+        mq.append(q_score)
+        return max(mq)
+    def scoreSelf(self):
+        mq = []
+        for i in range(5, 26, 3):
+            clf = RidgeClassifier(alpha=pow(10, -i))
+            clf.fit(self.train_X_processed, self.train_y)
+            q_score = clf.score(self.train_X_processed, self.train_y)
+            mq.append(q_score)
+        clf = RidgeClassifier(alpha=0)
+        clf.fit(self.train_X_processed, self.train_y)
+        q_score = clf.score(self.train_X_processed, self.train_y)
+        mq.append(q_score)
+        return max(mq)
     def score(self, n_regressors=("LogCV",), q_regressors=("Ridge",), n_alpha=0.1, q_alpha=0):
+        if not self.processed:
+            print("Unable to score. Data has not been processed")
+            return self
         reg_dict = {"LogCV": "Logistic Regression CV", "Log": "Logistic Regression", "Ridge": "Ridge Classifier"}
         for r in n_regressors:
             match r:
@@ -161,14 +182,11 @@ class Classify:
                 case _:
                     print("Regression type not valid")
                     continue
-            clf.fit(self.train_X_sampled, self.train_y_sampled)
-            score = clf.score(self.test_X_sampled, self.test_y_sampled)
+            clf.fit(self.train_X, self.train_y)
+            score = clf.score(self.test_X, self.test_y)
             print(f"{reg_dict[r]} (Without Quantum processing) yields: {score}")
 
         for r in q_regressors:
-            if not self.processed:
-                print("Unable to score. Data has not been processed")
-                return
             match r:
                 case "Log":
                     clf = LogisticRegression(max_iter=1000)
@@ -179,8 +197,8 @@ class Classify:
                 case _:
                     print("Regression type not valid")
                     continue
-            clf.fit(self.train_X_processed, self.train_y_sampled)
-            q_score = clf.score(self.test_X_processed, self.test_y_sampled)
+            clf.fit(self.train_X_processed, self.train_y)
+            q_score = clf.score(self.test_X_processed, self.test_y)
             print(f"{reg_dict[r]} (With Quantum processing) yields: {q_score}")
 
 
