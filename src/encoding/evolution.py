@@ -1,7 +1,7 @@
 import numpy as np
 from qutip import tensor, destroy, qeye, fock, sigmax, sigmay, mesolve, Options
 import os
-
+from scipy.fftpack import rfft, irfft, fftfreq
 class Evolve:
     cur_path = os.path.dirname(__file__)
     def __init__(self, img, t_total, pc_real, pc_imag, pq_real, pq_imag, N, g, nsteps, intervals):
@@ -22,21 +22,23 @@ class Evolve:
         self.psi_i = tensor(fock(N, 0), fock(2, 0))
         self.rho_i = self.psi_i * self.psi_i.dag()
 
+    def freq_filter(self, img):
+        pass
     def __pc_real(self, t, args):
         modified_img = self.img*self.pc_real
-        if t > self.t_total: return modified_img[-1]
+        if t >= self.t_total: return modified_img[-1]
         return modified_img[int(np.floor(t / self.t_total * self.img_len))]
     def __pc_imag(self, t, args):
         modified_img = self.img*self.pc_imag
-        if t > self.t_total: return np.conj(modified_img[-1])
+        if t >= self.t_total: return np.conj(modified_img[-1])
         return np.conj(modified_img[int(np.floor(t / self.t_total * self.img_len))])
     def __pq_real(self, t, args):
         modified_image = self.img*self.pq_real
-        if t > self.t_total: return modified_image[-1]
+        if t >= self.t_total: return modified_image[-1]
         return modified_image[int(np.floor(t / self.t_total * self.img_len))]
     def __pq_imag(self, t, args):
         modified_image = self.img*self.pq_imag
-        if t > self.t_total: return np.conj(modified_image[-1])
+        if t >= self.t_total: return np.conj(modified_image[-1])
         return np.conj(modified_image[int(np.floor(t / self.t_total * self.img_len))])
 
     def states(self):
