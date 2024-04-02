@@ -7,7 +7,7 @@ from sklearn.linear_model import LogisticRegressionCV, RidgeClassifier, Logistic
 from qutip import wigner
 import tensorflow as tf
 import tensorflow_datasets as tfds
-
+from qutip import qeye, destroy, tensor, displace
 class Classify:
     cur_path = os.path.dirname(__file__)
     def __init__(self, compression=4,
@@ -25,6 +25,16 @@ class Classify:
         self.dataset = dataset
         self.trained = False
         self.processed = False
+
+        path = os.path.join(self.cur_path, 'disps.npz')
+        disps = np.load(path)['arr_0']
+        self.displacements = [displace(self.N, d) for d in disps]
+
+        a = destroy(self.N)
+        self.P = (1j * np.pi * a.dag() * a).expm()
+
+
+
     def __loadData(self):
         if self.dataset not in tfds.list_builders():
             print("No such dataset available.")
@@ -118,6 +128,14 @@ class Classify:
             y = x[np.triu_indices_from(x,k=1)]
             r = np.concatenate((r, diag, y.real, y.imag))
         return r
+    def __disp(self, states):
+        r = []
+        for rho in states:
+            rho.tidyup()
+            for D in self.displacements:
+                m = (self.P*D.dag()*rho*D).tr()
+                r.append(m)
+        return np.real(r)
 
     def process(self, xRange=(-2.5, 2), yRange=(-2, 4.5), res=30):
         if not self.trained:
@@ -139,6 +157,15 @@ class Classify:
         print("Vectorizing quantum states...")
         self.train_X_processed = list(map(self.__rho, tqdm(self.train_X_states)))
         self.test_X_processed = list(map(self.__rho, tqdm(self.test_X_states)))
+        self.processed = True
+        return self
+    def process_disp(self):
+        if not self.trained:
+            print("Unable to process. Data has not been trained")
+            return self
+        print("Vectorizing quantum states...")
+        self.train_X_processed = list(map(self.__disp, tqdm(self.train_X_states)))
+        self.test_X_processed = list(map(self.__disp, tqdm(self.test_X_states)))
         self.processed = True
         return self
 

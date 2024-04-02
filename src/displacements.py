@@ -78,7 +78,7 @@ def wrap_cost(disps):
     ax.set_xlabel('Re'+r'$(\alpha)$')
     ax.set_ylabel('Im'+r'$(\alpha)$')
     clear_output(wait=True)
-    display(f)
+    #display(f)
     #print 'nr%s (%s)' % (cost , best cost),
     return cost , grad
 
@@ -89,4 +89,5 @@ ret = minimize(wrap_cost , init_disps , method='L-BFGS-B', jac=True , options=di
 print(ret.message)
 
 new_disps = ret.x[:n_disps] + 1j*ret.x[n_disps:]
+print(new_disps)
 # new_disps = np.concatenate(([0], new_disps ))
