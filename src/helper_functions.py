@@ -4,6 +4,7 @@ from src.TK_basics import PSD_rho
 from tqdm import tqdm
 from multiprocess.pool import Pool
 from sklearn.linear_model import RidgeClassifier
+from math import ceil, sqrt
 def trunc(values, decs=0):
     return np.trunc(values*10**decs)/(10**decs)
 def vectorize(y):
@@ -11,6 +12,15 @@ def vectorize(y):
     arr = []
     for i in y: arr.append(I[i])
     return np.column_stack(arr)
+
+def factor_int(n):
+    val = ceil(sqrt(n))
+    while True:
+        if not n%val:
+            val2 = n//val
+            break
+        val -= 1
+    return val, val2
 def lreg(X, y):
     x = X.T
     X1 = np.vstack((np.ones(len(x[0])), x))
@@ -110,7 +120,13 @@ def getrho(i):
         vec += list(rho2vec(PSD_rho(rho)))
     return vec
 
-
+def linspace(start, stop, step=1.):
+  """
+    Like np.linspace but uses step instead of num
+    This is inclusive to stop, so if start=1, stop=3, step=0.5
+    Output is: array([1., 1.5, 2., 2.5, 3.])
+  """
+  return np.linspace(start, stop, int((stop - start) / step + 1))
 def getRho(X_g, X_e, p_g, p_e, cdim, split, method):
     dm = int(np.sqrt((X_g.shape[1] + split) / split))
     Ep = getEp(cdim, dm, method)

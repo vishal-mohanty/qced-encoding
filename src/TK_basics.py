@@ -111,7 +111,7 @@ def PSD_rho(rho):  # -> pos semi definite rho, given hermitian with trace 1
     for k in np.arange(0, i + 1):
         la[k] = w[k] + a / (i + 1)
 
-    rho_f = 0 * rho.full()  # store final density matrix
+    rho_f = 0 * rho  # store final density matrix
     for x in np.arange(0, len(la)):
         rho_f = rho_f + (la[x] * Qobj(v[:, x]) * Qobj(v[:, x]).dag()).full()
 

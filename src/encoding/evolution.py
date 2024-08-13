@@ -5,28 +5,28 @@ from scipy.fftpack import rfft, irfft, fftfreq
 import matplotlib.pyplot as plt
 from xxhash import xxh3_128
 
-chi = 0.177e6
+chi = 0.177
 #chi=1.3e6
 #chi = 0
-Kerr = 3e3
-T1 = 120e-6
-T2 = 20e-6
+Kerr = 3e-3
+T1 = 120
+T2 = 20
 Tphi = - 1 / (1 / 2 / T1 - 1 / T2)
-cavT1 = 1.21e-3
-nbar_cav = 0.094
+cavT1 = 1.21e3
+nbar_cav = 0
 nbar_qb = 0
-Td = 2.84e-7
-w = 114.97e6
+Td = 2.84e-1
+w = 114.97
 
-T1_m = 103e-6
-T2_m = 13e-6
-chi_m = 1.48e6
-w_m = 175.62e6
+T1_m = 103
+T2_m = 13
+chi_m = 1.48
+w_m = 175.62
 
-sigma_parity, chop_parity = 16e-9, 4
-sigma_pns, chop_pns = 250e-9, 4
-A_parity = 6530617.972423978
-A_pns = 417959.5502351346
+sigma_parity, chop_parity = 16e-3, 4
+sigma_pns, chop_pns = 250e-3, 4
+A_parity = 6530617.972423978*1e-6
+A_pns = 0.4179595502351346
 
 
 
@@ -62,16 +62,18 @@ def pulse_parity(t, *args):
         return g
 class Evolve:
     i = 0
-    def __init__(self, img, t_total=2e-6, pc_real=0.0, pc_imag=0.0, pq_real=0.0, pq_imag=0.0,
+    def __init__(self, img, t_total=18, pc_real=0.0, pc_imag=0.0, pq_real=0.0, pq_imag=0.0,
                  cdim=13, nsteps=5000, intervals=3, measurement='pns trace',
-                 c_ops=True, anharm=True, ffilter=True,
+                 c_ops=True, anharm=True, kerr=True, ffilter=True,
                  dm=10):
         self.anharm = anharm
+        self.kerr = kerr
         if anharm:
             self.qdim = 3
         else:
             self.qdim = 2
-        self.img = (img+1)/2
+        self.img = np.pad((img+1)/2, (1, 1), 'constant')
+
         #self.img = img
         self.t_total = t_total
         self.cdim = cdim
@@ -113,18 +115,20 @@ class Evolve:
         self.gt = tensor(self.g, qeye(cdim))
         self.et = tensor(self.e, qeye(cdim))
         self.ffilter = ffilter
-        self.rho = None
+
+        self.__getRhos()
+
     def __str__(self):
         return str([self.img, self.t_total, self.pc_real, self.pc_imag, self.pq_real, self.pq_imag,
                     self.cdim, self.nsteps, self.intervals])
 
     def freq_filter(self, func):
         signal = np.array([func(t) for t in self.nlist])
-        signal = np.pad(signal, (1, 1), 'constant')
+        #signal = np.pad(signal, (1, 1), 'constant')
         W = fftfreq(signal.size, d=self.nlist[1] - self.nlist[0])
         f_signal = rfft(signal)
         cut_f_signal = f_signal.copy()
-        if self.ffilter: cut_f_signal[(abs(W) > 30e6)] = 0
+        if self.ffilter: cut_f_signal[(abs(W) > 30)] = 0
         cut_signal = irfft(cut_f_signal)
         cut_signal = cut_signal #- cut_signal[0]
         def f(t, args):
@@ -152,23 +156,30 @@ class Evolve:
         if t >= self.t_total: return np.conj(modified_image[-1])
         return modified_image[int(np.floor(t / self.t_total * self.img_len))]
 
+    def __getRhos(self):
+        options = Options(nsteps=self.nsteps)
 
+        H_disp = -2 * np.pi * chi * self.Cd * self.C * self.Qd * self.Q
+        if self.kerr: H_disp += 2 * np.pi * Kerr / 2 * self.Cd * self.Cd * self.C * self.C
+        if self.anharm: H_disp += -2 * np.pi * w / 2 * self.Qd * self.Qd * self.Q * self.Q
+        H = [H_disp,
+             [2 * np.pi * (self.Q + self.Qd), self.freq_filter(self.__pq_imag)],
+             [2j * np.pi * (self.Q - self.Qd), self.freq_filter(self.__pq_real)],
+             [2 * np.pi * (self.C + self.Cd), self.freq_filter(self.__pc_imag)],
+             [2j * np.pi * (self.C - self.Cd), self.freq_filter(self.__pc_real)]]
+        states = mesolve(H, self.rho_i, tlist=self.tlist, c_ops=self.c_ops, options=options).states
+        self.rhos = states[1:]
 
+    def getRho_cav(self):
+        return self.rhos[-1].ptrace(1)
+
+    def getRhos(self):
+        return self.rhos
     def vector(self, method="2qubit"):
         '''if os.path.isfile(vecfile := vecs + self.hash + ".npy"):
             return np.load(vecfile)'''
-        options = Options(nsteps=self.nsteps)
 
-        H_disp = -2*np.pi*chi * self.Cd * self.C * self.Qd * self.Q + \
-                   2*np.pi*Kerr/2 * self.Cd * self.Cd * self.C * self.C
-
-        if self.anharm: H_disp += -2*np.pi*w/2 * self.Qd*self.Qd*self.Q*self.Q
-        H = [H_disp,
-             [2 *np.pi*(self.Q + self.Qd), self.freq_filter(self.__pq_imag)],
-             [2j*np.pi*(self.Q - self.Qd), self.freq_filter(self.__pq_real)],
-             [2 *np.pi*(self.C + self.Cd), self.freq_filter(self.__pc_imag)],
-             [2j*np.pi*(self.C - self.Cd), self.freq_filter(self.__pc_real)]]
-        states = mesolve(H, self.rho_i, tlist=self.tlist, c_ops=self.c_ops, options=options).states
+        rhos = self.rhos
 
         # Parity Protocol
         H_disp_m = -2*np.pi*chi_m * self.Cd * self.C * self.Qd * self.Q + \
@@ -212,9 +223,9 @@ class Evolve:
         p_g = []
         p_e = []
         proj = fock_dm(self.cdim, self.dm-1)
-        self.rhos = states[1:]
+
         if method == "1qubit":
-            for rho in states[1:]:
+            for rho in rhos:
                 if self.measurement == "dm":
                     rho = rho.ptrace(1).full()
                     for i, j in zip(*np.triu_indices(self.dm)):
@@ -271,7 +282,7 @@ class Evolve:
             #np.save(vecs+self.hash, vec)
             return vec
         elif method == "2qubit":
-            for rho in states[1:]:
+            for rho in rhos:
                 if self.measurement == "dm":
                     rho = rho.ptrace(1).full()
                     for i, j in zip(*np.triu_indices(self.dm)):
@@ -289,23 +300,23 @@ class Evolve:
                         match self.measurement:
                             case 'parity' | 'par':
                                 disp_m = tensor(qeye(self.qdim), displace(self.cdim, alpha), qeye(self.qdim))
-                                rho_d_m = disp_m * rho_m * disp_m.dag()
+                                rho_d_m = disp_m.dag() * rho_m * disp_m
                                 p_e = mesolve(H_parity, rho_d_m, tlist=[0, Td + sigma_parity * chop_parity * 2],
                                               e_ops=e_ops_e).expect[0][-1]
                                 p = 2 * p_e - 1
                             case 'parity trace' | 'par trace':
                                 disp_t = tensor(qeye(self.qdim), displace(self.cdim, alpha))
-                                rho_d_t = disp_t * rho_t * disp_t.dag()
+                                rho_d_t = disp_t.dag() * rho_t * disp_t
                                 p = (P * rho_d_t.ptrace(1)).tr()
                             case 'photon number' | 'photon_number' | 'pns':
                                 disp_m = tensor(qeye(self.qdim), displace(self.cdim, alpha), qeye(self.qdim))
-                                rho_d_m = disp_m * rho_m * disp_m.dag()
+                                rho_d_m = disp_m.dag() * rho_m * disp_m
                                 p = mesolve(H_pns2, rho_d_m, tlist=[0, sigma_pns * chop_pns],
                                             e_ops=e_ops_e2, options=Options(nsteps=5000)).expect[0][-1]
 
                             case 'pns trace' | 'photon number trace' | 'photon_number trace':
                                 disp_t = tensor(qeye(self.qdim), displace(self.cdim, alpha))
-                                rho_d_t = disp_t * rho_t * disp_t.dag()
+                                rho_d_t = disp_t.dag() * rho_t * disp_t
                                 p = (proj * rho_d_t.ptrace(1)).tr()
                             case _:
                                 p = 0
@@ -313,20 +324,22 @@ class Evolve:
             vec = np.array(vec)
             # np.save(vecs+self.hash, vec)
             return vec
-    def rho_test(self):
-        return self.rhos
 
 # TODO: COMPARE PHOTON NUMBER TRACE TO PHOTON NUMBER MESOLVE
 # TODO: CREATE SEPARATE CASES FOR PHOTON NUMBER TRACE AND PARITY TRACE
 if __name__ == "__main__":
-    img = np.array([0.19031461653056986, -0.5433694189241283, 0.941050527248425, 0.4814215388610822, 0.5052590530838083,
-                    -0.4881473132004496, 0.18178470184430385, -0.35487379853721646, 0.5686678766949724,
-                    0.36226119031810744, 0.1553727142224298, -0.6545945224962656, -0.2925330621674876, 0.1809035742188693,
-                    0.59519396673181, -0.1256754626669716])
-    x = 1e6 * 0.5
-    e = Evolve(img, measurement='pns trace', cdim=13, dm=10, t_total=2e-6, anharm=True, c_ops=True,
-                      ffilter=True, intervals=1, nsteps=10000, pc_imag=x, pq_imag=x)
-    e.vector('2qubit')
-    rho = e.rho_test()
-    rho = rho.ptrace(1)
-    print('\n'.join(['\t'.join([str(cell) for cell in row]) for row in rho]))
+    img = np.array([0.19031461653056986, 0.5433694189241283, 0.941050527248425, 0.4814215388610822, 0.5052590530838083,
+                    0.4881473132004496, 0.18178470184430385, 0.35487379853721646, 0.5686678766949724,
+                    0.36226119031810744, 0.1553727142224298, 0.6545945224962656, 0.2925330621674876, 0.1809035742188693,
+                    0.59519396673181, 0.1256754626669716])
+    x = 0.175
+    e1 = Evolve(img, measurement='pns trace', cdim=20, dm=10, t_total=18, anharm=False, c_ops=True,
+                      ffilter=False, intervals=3, nsteps=5000, pc_imag=x, pq_imag=x)
+    z1 = e1.vector('2qubit')
+    e2 = Evolve(img, measurement='pns', cdim=20, dm=10, t_total=18, anharm=False, c_ops=True,
+           ffilter=False, intervals=3, nsteps=5000, pc_imag=x, pq_imag=x)
+    z2 = e2.vector('2qubit')
+    plt.plot(z1)
+    plt.plot(z2)
+    plt.legend(['pns trace', 'pns'])
+    plt.show()
